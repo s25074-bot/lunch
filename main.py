@@ -1,7 +1,7 @@
 import calendar
 import datetime
-import requests
 import re
+import requests
 import streamlit as st
 
 # -----------------------------------------------------------------------------
@@ -13,8 +13,10 @@ st.set_page_config(
     layout="wide"
 )
 
+# 카드 형태의 달력을 구현하기 위한 Custom CSS
 st.markdown("""
 <style>
+    /* 날짜 카드 기본 스타일 */
     .meal-card {
         border: 1px solid #e0e0e0;
         border-radius: 8px;
@@ -24,10 +26,12 @@ st.markdown("""
         min-height: 180px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
+    /* 오늘 날짜 카드 하이라이트 */
     .meal-card-today {
         border: 2px solid #3182ce;
         background-color: #f7fafc;
     }
+    /* 카드 헤더 (날짜/요일) */
     .card-header {
         font-weight: bold;
         font-size: 1rem;
@@ -45,6 +49,7 @@ st.markdown("""
         border-radius: 4px;
         font-size: 0.75rem;
     }
+    /* 급식 종류별 색상 뱃지 및 텍스트 */
     .meal-type-lunch {
         color: #2b6cb0;
         font-weight: bold;
@@ -63,11 +68,13 @@ st.markdown("""
         margin-top: 6px;
         margin-bottom: 2px;
     }
+    /* 메뉴 항목 텍스트 */
     .meal-item {
         font-size: 0.85rem;
         color: #4a5568;
         line-height: 1.3;
     }
+    /* 급식 없음 / 해당 없음 텍스트 */
     .no-meal {
         color: #a0aec0;
         font-size: 0.85rem;
@@ -78,7 +85,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. 알레르기 식재료 대응표 정의
+# 2. 알레르기 식재료 대응표 정의 (1~19번)
 # -----------------------------------------------------------------------------
 ALLERGY_MAP = {
     "1": "난류", "2": "우유", "3": "메밀", "4": "땅콩", "5": "대두",
@@ -88,10 +95,11 @@ ALLERGY_MAP = {
 }
 
 # -----------------------------------------------------------------------------
-# 3. 사이드바 설정
+# 3. 사이드바 구성 (학교 정보 및 옵션)
 # -----------------------------------------------------------------------------
 st.sidebar.title("⚙️ 설정")
 
+# Secrets 키 존재 여부 검사
 if "NEIS_KEY" not in st.secrets:
     st.error("⚠️ Streamlit Secrets에 'NEIS_KEY'가 설정되지 않았습니다.")
     st.info("`.streamlit/secrets.toml` 파일 또는 Cloud Secrets에 `NEIS_KEY = '발급받은키'`를 등록해 주세요.")
@@ -115,6 +123,7 @@ with st.sidebar.expander("ℹ️ 알레르기 번호-식재료 대응표"):
 # 4. 데이터 파싱 및 API 요청 함수
 # -----------------------------------------------------------------------------
 def fetch_meal_data(api_key, office_code, school_code, year, month):
+    """NEIS API를 통해 지정한 연월의 급식 데이터 요청"""
     _, last_day = calendar.monthrange(year, month)
     from_ymd = f"{year}{month:02d}01"
     to_ymd = f"{year}{month:02d}{last_day:02d}"
@@ -126,7 +135,7 @@ def fetch_meal_data(api_key, office_code, school_code, year, month):
         "pIndex": 1,
         "pSize": 100,
         "ATPT_OFCDC_SC_CODE": office_code,
-        "SD_SCH_HOUL_VALUE": school_code,  # 파라미터명 수정 (CLEAN -> HOUL)
+        "SD_SCH_HOUL_VALUE": school_code,  # NEIS 오픈API 파라미터명
         "MLSV_FROM_YMD": from_ymd,
         "MLSV_TO_YMD": to_ymd
     }
@@ -135,24 +144,25 @@ def fetch_meal_data(api_key, office_code, school_code, year, month):
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         
-        # JSON 형식 응답인지 안전하게 확인
+        # HTML 등의 응답이 들어왔을 때를 대비한 JSON 파싱 예외 처리
         try:
             data = response.json()
         except Exception:
-            raise Exception("NEIS API가 JSON 형태가 아닌 응답을 반환했습니다. API KEY나 학교 코드를 확인해 주세요.")
-        
+            raise Exception("NEIS API 응답이 JSON 형식이 아닙니다. API Key와 학교 코드를 확인해 주세요.")
+            
         if "mealServiceDietInfo" in data:
             return data["mealServiceDietInfo"][1]["row"]
         elif "RESULT" in data:
-            if data["RESULT"]["CODE"] == "INFO-200":
+            if data["RESULT"]["CODE"] == "INFO-200":  # 해당 조건의 데이터가 없는 경우
                 return []
             raise Exception(f"API 응답 에러 [{data['RESULT']['CODE']}]: {data['RESULT']['MESSAGE']}")
         return []
         
     except requests.exceptions.RequestException as e:
-        raise Exception(f"API 통신 실패: 인터넷 연결 또는 요청 URL/KEY를 확인해 주세요. ({e})")
+        raise Exception(f"API 통신 실패: 인터넷 연결 및 URL, KEY 상태를 확인해 주세요. ({e})")
 
 def parse_menu(menu_str, convert_flag):
+    """메뉴 텍스트 정제 및 알레르기 번호 변환"""
     if not menu_str:
         return []
     
@@ -206,9 +216,10 @@ st.markdown("---")
 # 6. 달력 그리드 출력
 # -----------------------------------------------------------------------------
 try:
-    with st.spinner("급식 데이터를 가져오는 중입니다..."):
+    with st.spinner("급식 데이터를 불러오는 중입니다..."):
         raw_meals = fetch_meal_data(neis_key, atpt_code, sd_sch_code, selected_year, selected_month)
     
+    # 날짜별 급식 구조화
     meals_by_date = {}
     for row in raw_meals:
         ymd = row["MLSV_YMD"]
@@ -223,9 +234,11 @@ try:
             "menu": parse_menu(menu_raw, convert_allergy)
         })
 
+    # 달력 생성을 위한 파이썬 calendar 모듈 (월요일 시작)
     cal = calendar.Calendar(firstweekday=0)
     month_days = cal.monthdayscalendar(selected_year, selected_month)
     
+    # 평일 헤더 (월~금)
     days_header = ["월", "화", "수", "목", "금"]
     cols = st.columns(5)
     for i, day_name in enumerate(days_header):
@@ -233,9 +246,10 @@ try:
 
     today_str = now.strftime("%Y%m%d")
 
+    # 주 단위 카드 출력 (평일만)
     for week in month_days:
         week_cols = st.columns(5)
-        for idx in range(5):
+        for idx in range(5):  # 0:월, 1:화, 2:수, 3:목, 4:금
             day = week[idx]
             with week_cols[idx]:
                 if day == 0:
@@ -261,6 +275,7 @@ try:
                 else:
                     day_meals = meals_by_date[date_ymd]
                     
+                    # 중식 / 석식 필터링
                     filtered_meals = []
                     for m in day_meals:
                         if meal_filter == "전체 보기":
